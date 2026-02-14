@@ -185,11 +185,10 @@ init();
 const ascii = fs.readFileSync("./handlers/ascii.txt", "utf8");
 console.log(chalk.gray(ascii.replace("{version}", VERSION)));
 
-const PORT = process.env.PORT || config.port || 3001;
-
 app.listen(PORT, "0.0.0.0", () =>
   log.info(`Skyport is listening on port ${PORT}`)
 );
+
 // 404 HANDLER
 app.get("*", async function (req, res) {
   res.render("errors/404", {
