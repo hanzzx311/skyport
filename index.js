@@ -1,23 +1,11 @@
-/*
- *           __                          __
- *      _____/ /____  ______  ____  _____/ /_
- *    / ___/ //_/ / / / __ \/ __ \/ ___/ __/
- *   (__  ) ,< / /_/ / /_/ / /_/ / /  / /_
- *  /____/_/|_|\__, / .___/\____/_/   \__/
- *           /____/_/
- *
- *  Skyport Panel 0.3.0 (Oz) - Railway Ready
- */
-
 const express = require("express");
 const session = require("express-session");
 const passport = require("passport");
 const bodyParser = require("body-parser");
-const fs = require("node:fs");
-const app = express();
+const fs = require("fs");
 const path = require("path");
 const chalk = require("chalk");
-const expressWs = require("express-ws")(app);
+const expressWs = require("express-ws");
 const { db } = require("./handlers/db.js");
 const translationMiddleware = require("./handlers/translation");
 const cookieParser = require("cookie-parser");
@@ -25,43 +13,32 @@ const rateLimit = require("express-rate-limit");
 const theme = require("./storage/theme.json");
 const analytics = require("./utils/analytics.js");
 const crypto = require("node:crypto");
-
-const sqlite = require("better-sqlite3");
-const SqliteStore = require("better-sqlite3-session-store")(session);
-const sessionStorage = new sqlite("sessions.db");
 const { loadPlugins } = require("./plugins/loadPls.js");
+const { init } = require("./handlers/init.js");
+const log = new (require("cat-loggr"))();
+const config = require("./config.js");
+
+const app = express();
+expressWs(app);
+
 let plugins = loadPlugins(path.join(__dirname, "./plugins"));
 plugins = Object.values(plugins).map((plugin) => plugin.config);
 
-const { init } = require("./handlers/init.js");
-const log = new (require("cat-loggr"))();
+// ================= SESSION =================
+const sqlite = require("better-sqlite3");
+const SqliteStore = require("better-sqlite3-session-store")(session);
+const sessionStorage = new sqlite("sessions.db");
 
-// ================= CONFIG VIA ENV =================
-const PORT = process.env.PORT || 3001;
-const SESSION_SECRET = process.env.SESSION_SECRET || "default_secret";
-const OG_TITLE = process.env.OG_TITLE || "Skyport";
-const OG_DESC = process.env.OG_DESC || "Skyport Panel";
-const MODE = process.env.MODE || "production";
-const VERSION = process.env.VERSION || "0.3.0";
-// ===================================================
-
-// SESSION SETUP
 app.use(
   session({
-    store: new SqliteStore({
-      client: sessionStorage,
-      expired: {
-        clear: true,
-        intervalMs: 9000000,
-      },
-    }),
-    secret: SESSION_SECRET,
+    store: new SqliteStore({ client: sessionStorage, expired: { clear: true, intervalMs: 9000000 } }),
+    secret: config.session_secret,
     resave: true,
     saveUninitialized: true,
   })
 );
 
-// BODY PARSING, COOKIES, ANALYTICS
+// ================= MIDDLEWARE =================
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(cookieParser());
@@ -70,93 +47,57 @@ app.use(translationMiddleware);
 app.use(passport.initialize());
 app.use(passport.session());
 
-// RATE LIMITER FOR POST
-const postRateLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  message: "Too many requests, please try again later",
-});
-app.use((req, res, next) => {
-  if (req.method === "POST") postRateLimiter(req, res, next);
-  else next();
-});
+const postRateLimiter = rateLimit({ windowMs: 60 * 1000, max: 30, message: "Too many requests" });
+app.use((req, res, next) => { req.method === "POST" ? postRateLimiter(req, res, next) : next(); });
 
-// RANDOM STRING GENERATOR
-function generateRandomString(length) {
-  return crypto
-    .getRandomValues(new Uint8Array(length))
-    .reduce((str, byte) => str + String.fromCharCode(byte), "");
-}
-function replaceRandomValues(obj) {
-  for (const key in obj) {
-    if (typeof obj[key] === "object" && obj[key] !== null) {
-      replaceRandomValues(obj[key]);
-    } else if (obj[key] === "Random") {
-      obj[key] = generateRandomString(16);
-    }
-  }
-}
-
-// LANGUAGES
+// ================= LANGUAGES =================
 function getLanguages() {
-  return fs.readdirSync(path.join(__dirname, "/lang")).map((file) =>
-    file.split(".")[0]
-  );
+  return fs.readdirSync(path.join(__dirname, "/lang")).map(file => file.split(".")[0]);
 }
 app.get("/setLanguage", async (req, res) => {
   const lang = req.query.lang;
   if (lang && getLanguages().includes(lang)) {
-    res.cookie("lang", lang, {
-      maxAge: 90000000,
-      httpOnly: true,
-      sameSite: "strict",
-    });
+    res.cookie("lang", lang, { maxAge: 90000000, httpOnly: true, sameSite: "strict" });
     req.user.lang = lang;
     res.json({ success: true });
   } else res.json({ success: false });
 });
 
-// GLOBAL MIDDLEWARE FOR SETTINGS
+// ================= GLOBAL SETTINGS =================
 app.use(async (req, res, next) => {
   try {
     const settings = await db.get("settings");
     res.locals.languages = getLanguages();
-    res.locals.ogTitle = OG_TITLE;
-    res.locals.ogDescription = OG_DESC;
+    res.locals.ogTitle = config.ogTitle;
+    res.locals.ogDescription = config.ogDescription;
     res.locals.footer = settings.footer;
     res.locals.theme = theme;
     res.locals.name = settings.name;
     res.locals.logo = settings.logo;
     res.locals.plugins = plugins;
     next();
-  } catch (error) {
-    log.error("Error fetching settings:", error);
-    next(error);
-  }
+  } catch (err) { log.error(err); next(err); }
 });
 
-// CACHE CONTROL IN PRODUCTION
-if (MODE === "production") {
+// ================= CACHE =================
+if (config.mode === "production") {
   app.use((req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Pragma", "no-cache");
     res.setHeader("Expires", "5");
     next();
   });
-  app.use("/assets", (req, res, next) => {
-    res.setHeader("Cache-Control", "public, max-age=1");
-    next();
-  });
+  app.use("/assets", (req, res, next) => { res.setHeader("Cache-Control", "public, max-age=1"); next(); });
 }
 
-// VIEWS & STATIC FILES
+// ================= VIEWS & STATIC =================
 app.set("view engine", "ejs");
 app.use(express.static("public"));
 
-// DYNAMIC ROUTES
+// ================= ROUTES =================
 const routesDir = path.join(__dirname, "routes");
 function loadRoutes(directory) {
-  fs.readdirSync(directory).forEach((file) => {
+  fs.readdirSync(directory).forEach(file => {
     const fullPath = path.join(directory, file);
     const stat = fs.statSync(fullPath);
     if (stat.isDirectory()) loadRoutes(fullPath);
@@ -169,30 +110,21 @@ function loadRoutes(directory) {
 }
 loadRoutes(routesDir);
 
-// PLUGIN ROUTES & VIEWS
+// PLUGINS
 const pluginRoutes = require("./plugins/pluginManager.js");
 app.use("/", pluginRoutes);
 const pluginDir = path.join(__dirname, "plugins");
-const PluginViewsDir = fs
-  .readdirSync(pluginDir)
-  .map((addonName) => path.join(pluginDir, addonName, "views"));
+const PluginViewsDir = fs.readdirSync(pluginDir).map(addon => path.join(pluginDir, addon, "views"));
 app.set("views", [path.join(__dirname, "views"), ...PluginViewsDir]);
 
-// INIT
+// INIT & START
 init();
-
-// ASCII & START SERVER
 const ascii = fs.readFileSync("./handlers/ascii.txt", "utf8");
-console.log(chalk.gray(ascii.replace("{version}", VERSION)));
+console.log(chalk.gray(ascii.replace("{version}", config.version)));
 
-app.listen(PORT, "0.0.0.0", () =>
-  log.info(`Skyport is listening on port ${PORT}`)
-);
+app.listen(config.port, "0.0.0.0", () => log.info(`Skyport is listening on port ${config.port}`));
 
-// 404 HANDLER
-app.get("*", async function (req, res) {
-  res.render("errors/404", {
-    req,
-    name: (await db.get("name")) || "Skyport",
-  });
+// 404
+app.get("*", async (req, res) => {
+  res.render("errors/404", { req, name: (await db.get("name")) || "Skyport" });
 });
