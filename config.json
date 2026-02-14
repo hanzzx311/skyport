@@ -1,13 +1,8 @@
 {
-  "baseUri": "",
-  "port": 0,
-  "session_secret": "Ptdaî3çTÈts\u0001j\r",
-  "domain": "",
+  "session_secret": "default_secret",
+  "port": 3001,
+  "ogTitle": "Skyport",
+  "ogDescription": "Skyport Panel",
   "mode": "production",
-  "version": "0.3.0",
-  "databaseURL": "sqlite://skyport.db",
-  "databaseTable": "skyport",
-  "saltRounds": 10,
-  "ogTitle": "Skyport Panel",
-  "ogDescription": "Skyport Panel"
+  "version": "0.3.0"
 }
